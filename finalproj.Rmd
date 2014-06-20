@@ -1,0 +1,128 @@
+Practical Machine Learning Project
+========================================================
+
+**20-Jun-2014**
+
+*Summary*
+
+Given my unfamiliarity with R, (as well as R markdown) and a limited amount of time, I elected to perform a simple analysis of the datasets provided:
+-  Clean up empty columns
+-	Split the training data into regression and cross-validation datasets
+-	Select relevant factors
+-	Preprocess the data using PCA
+-	Fit a RandomForest model to the regression dataset, using internal cross-validation
+-	Determine prediction quality on cross-validation portion of the training dataset
+-	Apply the model to the testing data
+
+**Clean up dataset**
+
+I used the apply function to remove columns with NA's, as well as manually extracted columns that did not appear to be instrument data.
+
+```{r}
+library(AppliedPredictiveModeling)
+library(caret)
+library(minerva)
+
+tr<-read.csv('pml-training.csv',na.strings=c("NA",""),header=T,stringsAsFactors=F)
+te<-read.csv('pml-testing.csv',na.strings=c("NA",""),header=T,stringsAsFactors=F)
+
+# pop out nans
+te<-te[!apply(te, 2, function(y) any(is.na(y))) ] 
+tr<-tr[!apply(tr, 2, function(y) any(is.na(y))) ] 
+
+
+
+```
+
+**Split the training data**
+
+I used the createDataPartition() function to split the data into training (for regression) and test sets (for manual cross-validation).
+
+```{r}
+
+inTrain = createDataPartition(tr$classe, p = 0.7)[[1]]
+training = (tr[ inTrain,8:59])# select all but classe
+testing = (tr[-inTrain,8:59]) # select all but problem id
+realtest<-te[,8:59]
+
+```
+
+**Select relevant factors**
+
+Selecting the relevant factors could have been done my simple linear covariance, but I was interested in applying package I've heard about for scoring non-linear correlations, the Minerva library.  I used the mine() function to determine the correlated parameters.
+
+```{r}
+# find correlations
+#M <- abs(cor(training))
+M <- abs(cor(training)) #M<-mine(training)  #try to use MINE (takes too long!)
+diag(M) <- 0
+ix<-which(M > 0.8,arr.ind=T)
+print(ix)
+```
+
+**Preprocess**
+
+I used the preprocess() function, as in the quizzes, to perform PCA on the training dataset.
+
+```{r}
+trpp=preProcess(training[,ix],method='pca') # use PCA to preprocess
+
+classe<-tr$classe[inTrain]
+trfull<-cbind(predict(trpp,training[,ix]),classe) #set for training and caret crossval
+classe<-tr$classe[-inTrain]
+tefull<-cbind(predict(trpp,testing[,ix]),classe) # sim testing set
+testfull<-predict(trpp,realtest[,ix]) # real testing set
+
+
+```
+
+
+
+**Fit the Model**
+
+I used the RandomForest method (method='rf') to fit the dataset, as in quiz 3.  I also used cross-validation as part of the trControl option.  This provided another level of protection against overfitting.
+
+```{r}
+
+modFit1<-train(classe~.,data=trfull,method='rf',trControl=trainControl(method='cv'),number=3,na.action=na.omit)
+#modFit2<-train(classe~.,data=training,method='gbm',verbose=F)
+
+
+save.image("proj_data.RData")
+pr<-predict(modFit1,newdata=trfull)
+prte<-predict(modFit1,newdata=tefull)
+answers<-predict(modFit1,newdata=testfull)
+
+```
+
+**Determine prediction quality**
+
+To determine the quality of the model, my cross-validation set was used with the confusionMatrix() function to examine the confusion matrix to measure the expected out-of-sample-error.  The accuracy of the model on the cross-validation set was:
+
+```{r}
+
+cm<-confusionMatrix(prte,tefull$classe)# look at quality of fit
+print(cm)
+
+
+```
+
+Finally, save the output files:
+
+```
+print("write output")
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+
+```
+**Apply to testing data**
+
+The trained random forest model was applied to the blinded testing data, and uploaded to the submission page.  The accuracy was close to that of the cross-validation set.  17/20 (85%) were correct
+
